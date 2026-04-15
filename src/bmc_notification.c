@@ -2,11 +2,11 @@
 // Windows native notification + sound plugin for Flutter FFI
 //
 // Features:
-//  - Windows Toast Notification (WinRT via COM)
-//  - Sound playback (PlaySound API) - single + loop
+//  - Windows Toast Notification (via PowerShell WinRT bridge - works on Win10+)
+//  - Sound playback: WAV (PlaySound) + MP3 (Windows Media Player COM / MF)
 //  - Taskbar icon flash
 //
-// Build: Requires Windows 10+ (WinRT COM apis)
+// Build: Requires Windows 10+
 
 #include "bmc_notification.h"
 
@@ -18,14 +18,6 @@
 #include <shellapi.h>
 #include <mmsystem.h>
 #include <objbase.h>
-#include <propvarutil.h>
-#include <propkey.h>
-#include <shlobj.h>
-#include <wrl.h>
-#include <wrl/implements.h>
-#include <wrl/event.h>
-#include <windows.ui.notifications.h>
-#include <notificationactivationcallback.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -34,9 +26,6 @@
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "propsys.lib")
-#pragma comment(lib, "runtimeobject.lib")
-#pragma comment(lib, "shlwapi.lib")
 
 // ============================================================================
 // Internal state
@@ -278,25 +267,76 @@ FFI_PLUGIN_EXPORT int showToastNotificationWithButtons(
 }
 
 // ============================================================================
-// SOUND PLAYBACK (PlaySound / mmsystem)
+// SOUND PLAYBACK
+// WAV  → PlaySound (winmm)
+// MP3  → PowerShell (Windows Media Player COM) — non-blocking async process
 // ============================================================================
 
-FFI_PLUGIN_EXPORT int playNotificationSound(const char* wavFilePath) {
-    if (!wavFilePath) return 0;
-    WCHAR wPath[MAX_PATH] = {0};
-    utf8ToWide(wavFilePath, wPath, MAX_PATH);
-    // SND_ASYNC = không chặn thread chính, SND_FILENAME = đường dẫn file
-    BOOL ok = PlaySoundW(wPath, NULL, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
-    return ok ? 1 : 0;
+// Check if file extension is WAV (case-insensitive)
+static BOOL isWavFile(const char* path) {
+    if (!path) return FALSE;
+    size_t len = strlen(path);
+    if (len < 4) return FALSE;
+    const char* ext = path + len - 4;
+    return (_stricmp(ext, ".wav") == 0);
 }
 
-// Ringtone loop thread function
+// Play MP3 one-shot (async via PowerShell WMP)
+static int playMp3Once(const char* mp3Path) {
+    WCHAR wPath[MAX_PATH] = {0};
+    utf8ToWide(mp3Path, wPath, MAX_PATH);
+
+    WCHAR psCmd[2048] = {0};
+    _snwprintf_s(psCmd, 2047, _TRUNCATE,
+        L"powershell -WindowStyle Hidden -Command \""
+        L"$wmp = New-Object -ComObject WMPlayer.OCX; "
+        L"$wmp.URL = '%s'; "
+        L"$wmp.controls.play(); "
+        L"Start-Sleep -s 60; "
+        L"$wmp.close()"
+        L"\"",
+        wPath
+    );
+
+    STARTUPINFOW si = {0};
+    PROCESS_INFORMATION pi = {0};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+
+    if (CreateProcessW(NULL, psCmd, NULL, NULL, FALSE,
+                       CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return 1;
+    }
+    return 0;
+}
+
+FFI_PLUGIN_EXPORT int playNotificationSound(const char* filePath) {
+    if (!filePath) return 0;
+    if (isWavFile(filePath)) {
+        WCHAR wPath[MAX_PATH] = {0};
+        utf8ToWide(filePath, wPath, MAX_PATH);
+        BOOL ok = PlaySoundW(wPath, NULL, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+        return ok ? 1 : 0;
+    } else {
+        // MP3/other → PowerShell
+        return playMp3Once(filePath);
+    }
+}
+
+// ─── Ringtone loop (supports both WAV and MP3) ────────────────────────────
+
+static HANDLE s_mp3PsProcess = NULL; // Handle to PowerShell process for MP3 ringtone
+
 static unsigned int __stdcall ringtoneThreadFn(void* arg) {
     char pathCopy[MAX_PATH] = {0};
     EnterCriticalSection(&s_ringtoneLock);
     strncpy_s(pathCopy, MAX_PATH, s_ringtonePath, _TRUNCATE);
     LeaveCriticalSection(&s_ringtoneLock);
 
+    BOOL isWav = isWavFile(pathCopy);
     WCHAR wPath[MAX_PATH] = {0};
     utf8ToWide(pathCopy, wPath, MAX_PATH);
 
@@ -306,28 +346,68 @@ static unsigned int __stdcall ringtoneThreadFn(void* arg) {
         LeaveCriticalSection(&s_ringtoneLock);
         if (!running) break;
 
-        PlaySoundW(wPath, NULL, SND_FILENAME | SND_SYNC | SND_NODEFAULT);
+        if (isWav) {
+            PlaySoundW(wPath, NULL, SND_FILENAME | SND_SYNC | SND_NODEFAULT);
+        } else {
+            // MP3: play via PowerShell (blocking for duration)
+            WCHAR psCmd[2048] = {0};
+            _snwprintf_s(psCmd, 2047, _TRUNCATE,
+                L"powershell -WindowStyle Hidden -Command \""
+                L"$wmp = New-Object -ComObject WMPlayer.OCX; "
+                L"$wmp.URL = '%s'; "
+                L"$wmp.controls.play(); "
+                L"do { Start-Sleep -m 100 } while ($wmp.playState -ne 1); "
+                L"$wmp.close()"
+                L"\"",
+                wPath
+            );
+            STARTUPINFOW si = {0};
+            PROCESS_INFORMATION pi = {0};
+            si.cb = sizeof(si);
+            si.dwFlags = STARTF_USESHOWWINDOW;
+            si.wShowWindow = SW_HIDE;
 
-        // Check again after one play
-        EnterCriticalSection(&s_ringtoneLock);
-        running = s_ringtoneRunning;
-        LeaveCriticalSection(&s_ringtoneLock);
-        if (!running) break;
+            HANDLE hProc = NULL;
+            if (CreateProcessW(NULL, psCmd, NULL, NULL, FALSE,
+                               CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+                hProc = pi.hProcess;
+                CloseHandle(pi.hThread);
+            }
+
+            // Wait, but break out if ringtone was stopped
+            if (hProc) {
+                while (WaitForSingleObject(hProc, 200) == WAIT_TIMEOUT) {
+                    EnterCriticalSection(&s_ringtoneLock);
+                    BOOL still = s_ringtoneRunning;
+                    LeaveCriticalSection(&s_ringtoneLock);
+                    if (!still) {
+                        TerminateProcess(hProc, 0);
+                        break;
+                    }
+                }
+                CloseHandle(hProc);
+            }
+        }
 
         // Short gap between repeats
-        Sleep(200);
+        EnterCriticalSection(&s_ringtoneLock);
+        BOOL running2 = s_ringtoneRunning;
+        LeaveCriticalSection(&s_ringtoneLock);
+        if (!running2) break;
+
+        Sleep(300);
     }
     return 0;
 }
 
-FFI_PLUGIN_EXPORT int playRingtoneLoop(const char* wavFilePath) {
-    if (!wavFilePath) return 0;
+FFI_PLUGIN_EXPORT int playRingtoneLoop(const char* filePath) {
+    if (!filePath) return 0;
 
     // Stop existing ringtone
     stopRingtone();
 
     EnterCriticalSection(&s_ringtoneLock);
-    strncpy_s(s_ringtonePath, MAX_PATH, wavFilePath, _TRUNCATE);
+    strncpy_s(s_ringtonePath, MAX_PATH, filePath, _TRUNCATE);
     s_ringtoneRunning = TRUE;
     LeaveCriticalSection(&s_ringtoneLock);
 
@@ -340,11 +420,11 @@ FFI_PLUGIN_EXPORT void stopRingtone(void) {
     s_ringtoneRunning = FALSE;
     LeaveCriticalSection(&s_ringtoneLock);
 
-    // PlaySoundW với NULL dừng âm thanh đang phát
+    // Stop WAV immediately
     PlaySoundW(NULL, NULL, SND_PURGE);
 
     if (s_ringtoneThread) {
-        WaitForSingleObject(s_ringtoneThread, 3000);
+        WaitForSingleObject(s_ringtoneThread, 4000);
         CloseHandle(s_ringtoneThread);
         s_ringtoneThread = NULL;
     }
@@ -363,12 +443,6 @@ FFI_PLUGIN_EXPORT int isRingtonePlaying(void) {
 
 FFI_PLUGIN_EXPORT int flashTaskbarIcon(int64_t hwnd, int count) {
     HWND hWnd = hwnd != 0 ? (HWND)(intptr_t)hwnd : GetForegroundWindow();
-    if (!hWnd) {
-        // Fallback: find top-level window of this process
-        DWORD pid = GetCurrentProcessId();
-        // Simple enum via EnumWindows would be needed; skip for now
-        hWnd = GetForegroundWindow();
-    }
     if (!hWnd) return 0;
 
     FLASHWINFO fi = {0};
@@ -376,7 +450,7 @@ FFI_PLUGIN_EXPORT int flashTaskbarIcon(int64_t hwnd, int count) {
     fi.hwnd      = hWnd;
     fi.dwFlags   = count == 0 ? (FLASHW_ALL | FLASHW_TIMERNOFG) : FLASHW_ALL;
     fi.uCount    = count == 0 ? 0 : (UINT)count;
-    fi.dwTimeout = 0; // default cursor blink rate
+    fi.dwTimeout = 0;
     FlashWindowEx(&fi);
     return 1;
 }
