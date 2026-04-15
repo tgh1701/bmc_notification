@@ -1,37 +1,37 @@
 cmake_minimum_required(VERSION 3.14)
 
-# Plugin project
 project(bmc_notification_library VERSION 0.0.1 LANGUAGES C)
 
 # ============================================================================
 # Native library
 # ============================================================================
 
-set(SOURCE_FILES
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bmc_notification.c"
+add_library(bmc_notification SHARED
+  "${CMAKE_CURRENT_SOURCE_DIR}/bmc_notification.c"
 )
 
-add_library(bmc_notification SHARED ${SOURCE_FILES})
+# C99 — MSVC compatible
+target_compile_features(bmc_notification PRIVATE c_std_99)
 
-# Windows SDK & subsystem
 target_compile_definitions(bmc_notification PRIVATE
   UNICODE
   _UNICODE
-  _WIN32_WINNT=0x0A00   # Windows 10
+  WIN32_LEAN_AND_MEAN
+  _WIN32_WINNT=0x0A00    # Windows 10+
+  _CRT_SECURE_NO_WARNINGS
 )
 
+# Only what we actually use:
+#   winmm   → PlaySound, PlaySoundW
+#   user32  → FlashWindowEx, GetForegroundWindow
+#   kernel32 → CreateProcess, etc. (auto-linked)
 target_link_libraries(bmc_notification PRIVATE
-  winmm       # PlaySound
-  ole32       # COM
-  shell32     # Shell
-  propsys     # PropVariant
-  shlwapi     # StrCpy helpers
-  combase     # RoActivateInstance (WinRT)
-  runtimeobject  # Windows Runtime
+  winmm
+  user32
 )
 
 # ============================================================================
-# Install rule: copy DLL next to the Flutter runner
+# Install rule — copy DLL next to the Flutter runner
 # ============================================================================
 install(
   TARGETS bmc_notification
