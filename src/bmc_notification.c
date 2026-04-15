@@ -64,7 +64,6 @@ static BOOL isWav(const char* path) {
 // ============================================================================
 
 // Phát file âm thanh một lần qua MCI (async, không block)
-// alias: tên định danh để sau này có thể close
 static BOOL mciPlayOnce(const char* filePath, const WCHAR* alias) {
     WCHAR wPath[MAX_PATH] = {0};
     utf8ToWide(filePath, wPath, MAX_PATH);
@@ -75,17 +74,11 @@ static BOOL mciPlayOnce(const char* filePath, const WCHAR* alias) {
     _snwprintf_s(cmd, _countof(cmd), _TRUNCATE, L"close %s", alias);
     mciSendStringW(cmd, NULL, 0, NULL);
 
-    // Mở file
+    // Mở file — không chỉ định type, Windows tự detect (WAV, MP3, ...)
     _snwprintf_s(cmd, _countof(cmd), _TRUNCATE,
-        L"open \"%s\" type mpegvideo alias %s", wPath, alias);
+        L"open \"%s\" alias %s", wPath, alias);
     MCIERROR err = mciSendStringW(cmd, NULL, 0, NULL);
-    if (err != 0) {
-        // fallback: thử type waveaudio (cho WAV)
-        _snwprintf_s(cmd, _countof(cmd), _TRUNCATE,
-            L"open \"%s\" type waveaudio alias %s", wPath, alias);
-        err = mciSendStringW(cmd, NULL, 0, NULL);
-        if (err != 0) return FALSE;
-    }
+    if (err != 0) return FALSE;
 
     // Phát
     _snwprintf_s(cmd, _countof(cmd), _TRUNCATE, L"play %s", alias);
@@ -280,17 +273,11 @@ static unsigned int __stdcall _ringtoneThread(void* arg) {
             // WAV: SND_SYNC block thread cho đến khi xong
             PlaySoundW(wPath, NULL, SND_FILENAME | SND_SYNC | SND_NODEFAULT);
         } else {
-            // MP3: mở MCI, đợi xong hoặc bị dừng
+            // MP3: mở MCI (không specify type - Windows tự detect)
             WCHAR cmdOpen[MAX_PATH + 64] = {0};
             _snwprintf_s(cmdOpen, _countof(cmdOpen), _TRUNCATE,
-                L"open \"%s\" type mpegvideo alias %s", wPath, MCI_ALIAS_RING);
+                L"open \"%s\" alias %s", wPath, MCI_ALIAS_RING);
             MCIERROR err = mciSendStringW(cmdOpen, NULL, 0, NULL);
-            if (err != 0) {
-                // fallback waveaudio
-                _snwprintf_s(cmdOpen, _countof(cmdOpen), _TRUNCATE,
-                    L"open \"%s\" type waveaudio alias %s", wPath, MCI_ALIAS_RING);
-                err = mciSendStringW(cmdOpen, NULL, 0, NULL);
-            }
             if (err == 0) {
                 WCHAR cmdPlay[64] = {0};
                 _snwprintf_s(cmdPlay, _countof(cmdPlay), _TRUNCATE,
