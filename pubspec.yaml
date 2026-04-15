@@ -1,0 +1,25 @@
+name: bmc_notification
+description: Windows native toast notification, sound playback, and taskbar flash plugin for Flutter.
+version: 0.0.1
+homepage: https://github.com/tgh1701/bmc_notification
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: '>=3.7.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+# Declare this package's native libraries for Flutter build
+flutter:
+  plugin:
+    platforms:
+      windows:
+        ffiPlugin: true
