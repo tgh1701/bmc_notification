@@ -1,15 +1,15 @@
 # bmc_notification
 
-Plugin Flutter FFI cho Windows cung cấp:
+Flutter plugin cung cấp **Windows native notifications** bao gồm:
 
-- ✅ **Toast Notification** — hiển thị thông báo góc phải màn hình (Windows Action Center)
-- ✅ **Notification Sound** — phát âm thanh `.wav` khi có tin nhắn
-- ✅ **Ringtone Loop** — phát nhạc chuông lặp liên tục khi có cuộc gọi đến
-- ✅ **Taskbar Flash** — nhấp nháy icon taskbar để thu hút sự chú ý
+- 🔔 **Toast Notification** — Thông báo góc màn hình (WinRT via PowerShell)
+- 🎵 **Sound Playback** — Phát âm thanh `.wav` (PlaySound) và `.mp3` (WMP)
+- 📞 **Ringtone Loop** — Nhạc chuông lặp vô hạn, dừng tức thì
+- 💡 **Taskbar Flash** — Nhấp nháy icon trên taskbar (FlashWindowEx)
 
-## Cài đặt
+---
 
-### pubspec.yaml
+## 📦 Cài đặt
 
 ```yaml
 dependencies:
@@ -19,61 +19,136 @@ dependencies:
       ref: main
 ```
 
-## Sử dụng
+---
 
-### Khởi tạo (1 lần khi app start)
+## 🚀 Sử dụng nhanh
 
 ```dart
 import 'package:bmc_notification/bmc_notification.dart';
 
-// Trong main() hoặc initState() của widget root
-await BmcNotification.init(appId: 'com.bmctech.viva');
-```
+// 1. Khởi tạo (gọi 1 lần trong main())
+await BmcNotification.init(appId: 'com.myapp.viva');
 
-### Thông báo tin nhắn mới
-
-```dart
+// 2. Hiện toast tin nhắn
 await BmcNotification.showMessage(
-  title: 'VIVA',
-  message: 'Bạn có tin nhắn mới từ Nguyễn Văn A',
-  soundPath: r'C:\path\to\message.wav',  // hoặc absolute path từ assets
+  title: 'Nguyen Van A',
+  message: 'Bạn có tin nhắn mới',
+  soundPath: '/path/to/notification.wav', // optional
   flashTaskbar: true,
 );
-```
 
-### Cuộc gọi đến
-
-```dart
-// Hiện toast + phát nhạc chuông
+// 3. Hiện toast cuộc gọi + phát nhạc chuông
 await BmcNotification.showIncomingCall(
-  callerName: 'Nguyễn Văn A đang gọi...',
-  ringtonePath: r'C:\path\to\ringtone.wav',
+  callerName: 'Tran Thi B',
+  ringtonePath: '/path/to/ringtone.wav', // optional
   acceptLabel: 'Nghe máy',
   rejectLabel: 'Từ chối',
+  flashTaskbar: true,
 );
 
-// Khi nghe máy / kết thúc cuộc gọi
+// 4. Phát âm thanh 1 lần
+BmcNotification.playMessageSound(wavPath: '/path/to/sound.wav');
+
+// 5. Nhạc chuông lặp
+BmcNotification.startRingtone(wavPath: '/path/to/ring.wav');
+
+// 6. Dừng nhạc chuông
 BmcNotification.stopRingtone();
+
+// 7. Flash taskbar
+BmcNotification.flashTaskbar(count: 5);   // 5 lần
+BmcNotification.flashTaskbar(count: 0);   // Vô hạn (đến khi focus)
 BmcNotification.stopFlashTaskbar();
+
+// 8. Kiểm tra nhạc chuông
+bool playing = BmcNotification.isRingtonePlaying;
+
+// 9. Giải phóng khi app thoát
+BmcNotification.dispose();
 ```
 
-### API đầy đủ
+---
 
-| Hàm | Mô tả |
-|-----|-------|
-| `BmcNotification.init(appId)` | Khởi tạo plugin |
-| `BmcNotification.showMessage(...)` | Toast + Sound tin nhắn |
-| `BmcNotification.showIncomingCall(...)` | Toast + Ringtone cuộc gọi |
-| `BmcNotification.playMessageSound(wavPath)` | Phát âm thanh 1 lần |
-| `BmcNotification.startRingtone(wavPath)` | Bắt đầu nhạc chuông lặp |
-| `BmcNotification.stopRingtone()` | Dừng nhạc chuông |
-| `BmcNotification.isRingtonePlaying` | Kiểm tra ringtone |
-| `BmcNotification.flashTaskbar(count)` | Nhấp nháy taskbar |
-| `BmcNotification.stopFlashTaskbar()` | Dừng nhấp nháy |
-| `BmcNotification.dispose()` | Giải phóng khi thoát app |
+## 📁 Sử dụng với Flutter Assets
 
-## Yêu cầu
+> Vì Windows FFI cần đường dẫn tuyệt đối, bạn cần giải nén assets ra thư mục tạm trước.
 
-- Windows 10 trở lên
-- Flutter 3.7+
-- Đặt file `.wav` vào assets và lấy đường dẫn tuyệt đối khi gọi
+```dart
+import 'dart:io';
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+
+Future<String> extractAsset(String assetPath) async {
+  final data = await rootBundle.load(assetPath);
+  final bytes = data.buffer.asUint8List();
+  final dir = await getTemporaryDirectory();
+  final file = File('${dir.path}/${assetPath.split('/').last}');
+  await file.writeAsBytes(bytes, flush: true);
+  return file.path;
+}
+
+// Sử dụng
+final soundPath = await extractAsset('assets/sounds/notification.wav');
+BmcNotification.playMessageSound(wavPath: soundPath);
+```
+
+---
+
+## 🛠️ Build DLL (lần đầu tiên)
+
+```bash
+# Trong thư mục project Flutter dùng plugin này
+flutter build windows
+```
+
+DLL `bmc_notification.dll` sẽ tự động được build và copy vào `build\windows\x64\runner\Release\`.
+
+---
+
+## 🖥️ Requirements
+
+| | |
+|---|---|
+| **OS** | Windows 10+ (64-bit) |
+| **Flutter** | >= 3.7.0 |
+| **Dart** | >= 3.0.0 |
+
+---
+
+## 📂 Cấu trúc Plugin
+
+```
+bmc_notification/
+├── src/
+│   ├── bmc_notification.h     ← C API header
+│   └── bmc_notification.c     ← Native Windows implementation
+├── windows/
+│   └── CMakeLists.txt         ← Windows build config
+├── lib/
+│   └── bmc_notification.dart  ← Dart FFI wrapper
+└── example/                   ← Demo app đầy đủ
+    └── lib/main.dart
+```
+
+---
+
+## 📖 API Reference
+
+| Method | Mô tả |
+|--------|-------|
+| `init({appId})` | Khởi tạo plugin. Gọi trước các method khác |
+| `showMessage({title, message, soundPath?, flashTaskbar})` | Hiện toast tin nhắn |
+| `showIncomingCall({callerName, ringtonePath?, acceptLabel, rejectLabel, flashTaskbar})` | Hiện toast cuộc gọi |
+| `playMessageSound({wavPath})` | Phát âm thanh 1 lần (WAV/MP3) |
+| `startRingtone({wavPath})` | Nhạc chuông lặp (WAV/MP3) |
+| `stopRingtone()` | Dừng nhạc chuông |
+| `isRingtonePlaying` | `true` nếu đang phát nhạc chuông |
+| `flashTaskbar({count})` | Flash taskbar (0 = vô hạn) |
+| `stopFlashTaskbar()` | Dừng flash |
+| `dispose()` | Giải phóng tài nguyên native |
+
+---
+
+## 📄 License
+
+MIT
